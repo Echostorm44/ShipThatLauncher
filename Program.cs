@@ -14,6 +14,10 @@ internal class Program
             {
                 settings.LatestDownloadedUpdateDate = DateTime.MinValue;
             }
+            if(settings.DoNotDeleteTheseFiles == null)
+            {
+                settings.DoNotDeleteTheseFiles = "";
+            }
             string GitHubApiBaseUrl = "https://api.github.com/repos/";
             using var httpClient = new HttpClient();
             httpClient.DefaultRequestHeaders.Add("User-Agent", "ShipThatLauncher");
@@ -43,43 +47,67 @@ internal class Program
 
                         foreach(var ass in rel.assets)
                         {
-                            if(ass.browser_download_url.EndsWith(settings.ZipName))
+                            if(!ass.browser_download_url.EndsWith(settings.ZipName))
                             {
-                                Console.WriteLine($"Found it!  Downloading {ass.browser_download_url}...");
-                                var downloadResponse = await httpClient.GetAsync(ass.browser_download_url);
-                                if(downloadResponse.IsSuccessStatusCode)
-                                {
-                                    var downloadStream = await downloadResponse.Content.ReadAsStreamAsync();
-                                    var downloadPath = Path.Combine(Path.GetTempPath(), 
-                                        Guid.NewGuid().ToString() + ".zip");
-                                    using(var fileStream = new FileStream(downloadPath, FileMode.Create,
-                                        FileAccess.Write, FileShare.None))
-                                    {
-                                        await downloadStream.CopyToAsync(fileStream);
-                                    }
-                                    var extractPath = AppContext.BaseDirectory;
-                                    var zip = ZipFile.OpenRead(downloadPath);
-                                    foreach(var item in zip.Entries)
-                                    {
-                                        Console.WriteLine($"Extracting {item.FullName}");
-                                        var destPath = Path.GetFullPath(Path.Combine(extractPath, item.FullName));
-                                        if(!Directory.Exists(Path.GetDirectoryName(destPath)))
-                                        {
-                                            Directory.CreateDirectory(Path.GetDirectoryName(destPath));
-                                        }
-                                        if(item.Name != "" && item.Name != "launcher.exe")
-                                        {
-                                            item.ExtractToFile(destPath, true);
-                                        }
-                                    }
-
-                                    zip.Dispose();
-                                    File.Delete(downloadPath);
-                                    settings.LatestDownloadedUpdateDate = rel.published_at;
-                                    File.WriteAllText(settingsPath, JsonSerializer.Serialize(settings));
-                                }
-                                return;
+                                continue;
                             }
+
+                            Console.WriteLine($"Found it!  Downloading {ass.browser_download_url}...");
+                            var downloadResponse = await httpClient.GetAsync(ass.browser_download_url);
+                            if(downloadResponse.IsSuccessStatusCode)
+                            {
+                                var downloadStream = await downloadResponse.Content.ReadAsStreamAsync();
+                                var downloadPath = Path.Combine(Path.GetTempPath(),
+                                    Guid.NewGuid().ToString() + ".zip");
+                                using(var fileStream = new FileStream(downloadPath, FileMode.Create,
+                                    FileAccess.Write, FileShare.None))
+                                {
+                                    await downloadStream.CopyToAsync(fileStream);
+                                }
+                                var extractPath = AppContext.BaseDirectory;
+
+                                // Ok at this stage we're confident we've got a clean download && we're
+                                // about to install it.  We want to clean out the folder first so if 
+                                // they stopped using something we don't want to keep it around
+                                // but we do want to keep things that should survive the update like 
+                                // user settings and such
+                                var filesToDelete = Directory.GetFiles(extractPath,
+                                    "*.*", SearchOption.AllDirectories);
+                                var filesToKeep = settings.DoNotDeleteTheseFiles.Split(';', 
+                                    StringSplitOptions.RemoveEmptyEntries);
+                                Console.WriteLine("Cleaning Up Old Install...");
+                                foreach(var item in filesToDelete)
+                                {
+                                    var fi = new FileInfo(item);
+                                    if(fi.Name != "launcher.exe" && 
+                                        !filesToKeep.Contains(fi.Name))
+                                    {
+                                        Console.WriteLine($"Deleting {fi.FullName}");
+                                        fi.Delete();
+                                    }
+                                }
+
+                                var zip = ZipFile.OpenRead(downloadPath);
+                                foreach(var item in zip.Entries)
+                                {
+                                    Console.WriteLine($"Extracting {item.FullName}");
+                                    var destPath = Path.GetFullPath(Path.Combine(extractPath, item.FullName));
+                                    if(!Directory.Exists(Path.GetDirectoryName(destPath)))
+                                    {
+                                        Directory.CreateDirectory(Path.GetDirectoryName(destPath));
+                                    }
+                                    if(item.Name != "" && item.Name != "launcher.exe")
+                                    {
+                                        item.ExtractToFile(destPath, true);
+                                    }
+                                }
+
+                                zip.Dispose();
+                                File.Delete(downloadPath);
+                                settings.LatestDownloadedUpdateDate = rel.published_at;
+                                File.WriteAllText(settingsPath, JsonSerializer.Serialize(settings));
+                            }
+                            return;
                         }
                     }
                 }
@@ -130,4 +158,5 @@ public class SetupSettings
     public string GithubRepo { get; set; }
     public string ZipName { get; set; }
     public DateTime? LatestDownloadedUpdateDate { get; set; }
+    public string DoNotDeleteTheseFiles { get; set; }
 }
